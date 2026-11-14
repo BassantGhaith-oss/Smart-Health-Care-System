@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PulseCare – Smart Heart Monitoring &amp; Healthcare</title>
+  <script>document.documentElement.dataset.theme = localStorage.getItem('hm_theme') || 'dark';</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+</head>
+<body>
+
+<!-- ============ SIGN IN ============ -->
+<div id="login" class="login hidden">
+  <div class="login-hero">
+    <div class="brand big"><span class="brand-mark" data-icon="heart"></span><div><strong>PulseCare</strong><small>Smart heart monitoring</small></div></div>
+    <h2>Care that notices<br />before it is too late.</h2>
+    <p>Live vitals from wearable sensors, automatic risk classification and instant alerts for the right people.</p>
+    <svg class="login-ecg" viewBox="0 0 400 80" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,40 60,40 80,40 92,12 104,68 116,40 170,40 190,40 202,8 214,72 226,40 290,40 310,40 322,16 334,64 346,40 400,40" /></svg>
+    <ul class="login-points">
+      <li><span data-icon="shield"></span>Role-based access for administrators, nurses and hospitals</li>
+      <li><span data-icon="bell"></span>Alerts that reach the on-duty team automatically</li>
+      <li><span data-icon="chart"></span>Health analysis with time-in-range and risk insights</li>
+    </ul>
+  </div>
+  <div class="login-card" id="login-card">
+    <form id="login-form" autocomplete="on">
+      <h2>Welcome back</h2>
+      <p class="muted">Sign in to the PulseCare dashboard</p>
+      <label class="lfield">Username<input id="login-user" name="username" autocomplete="username" required placeholder="e.g. admin" /></label>
+      <label class="lfield">Password<input id="login-pass" name="password" type="password" autocomplete="current-password" required placeholder="Your password" /></label>
+      <p id="login-err" class="form-err hidden" role="alert"></p>
+      <button class="btn primary block" type="submit">Sign in</button>
+      <div class="demo-accounts">
+        <p class="muted small">Demo accounts. Click one to sign in:</p>
+        <div id="login-hints"></div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="app locked">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-mark" data-icon="heart"></span>
+      <div><strong>PulseCare</strong><small>Smart heart monitoring</small></div>
+    </div>
+    <nav class="nav">
+      <span class="nav-label">Monitoring</span>
+      <button class="nav-item active" data-view="overview" data-perm="view.overview"><span data-icon="grid"></span>Overview</button>
+      <button class="nav-item" data-view="monitor" data-perm="view.monitor"><span data-icon="activity"></span>Live monitor</button>
+      <button class="nav-item" data-view="analysis" data-perm="view.analysis"><span data-icon="chart"></span>Health analysis</button>
+      <button class="nav-item" data-view="alerts" data-perm="view.alerts"><span data-icon="bell"></span>Alerts<em id="nav-alert-badge" class="nav-badge hidden">0</em></button>
+      <span class="nav-label">Care</span>
+      <button class="nav-item" data-view="patients" data-perm="view.patients"><span data-icon="users"></span>Patients</button>
+      <button class="nav-item" data-view="staff" data-perm="view.staff"><span data-icon="briefcase"></span>Care team</button>
+      <button class="nav-item" data-view="map" data-perm="view.map"><span data-icon="pin"></span>Emergency map</button>
+      <span class="nav-label" data-perm="view.settings">System</span>
+      <button class="nav-item" data-view="settings" data-perm="view.settings"><span data-icon="sliders"></span>Settings &amp; data</button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="mode-pill" id="mode-pill"></div>
+      <p class="muted small">Sensor → Firebase → dashboard → classifier → alerts</p>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn only-mobile" id="btn-menu" aria-label="Open menu" data-icon="menu"></button>
+      <div class="topbar-title">
+        <h1 id="page-title">Overview</h1>
+        <p id="page-sub" class="muted">Every monitored patient at a glance</p>
+      </div>
+      <div class="gsearch">
+        <span data-icon="search"></span>
+        <input id="global-search" type="search" placeholder="Search patients by name or record number" autocomplete="off" aria-label="Search patients" />
+        <kbd>/</kbd>
+        <div id="search-results" class="dropdown hidden"></div>
+      </div>
+      <div class="topbar-right">
+        <span class="chip none" id="chip-conn">Connecting…</span>
+        <span class="chip none" id="chip-device">Device: no data</span>
+        <span class="clock" id="clock">--:--</span>
+        <button class="icon-btn" id="btn-mute" aria-label="Toggle alarm sound" data-icon="volume"></button>
+        <button class="icon-btn" id="btn-theme" aria-label="Toggle theme" data-icon="sun"></button>
+        <div class="bellwrap">
+          <button class="icon-btn" id="btn-bell" aria-label="Notifications"><span data-icon="bell"></span><em id="bell-count" class="bell-count hidden">0</em></button>
+          <div id="bell-panel" class="dropdown bell-panel hidden">
+            <div class="dd-title"><strong>Open alerts</strong><button class="link" data-go="alerts">View all</button></div>
+            <div id="bell-list"></div>
+          </div>
+        </div>
+        <div class="usermenu">
+          <button class="operator" id="user-chip" aria-haspopup="true"><span class="avatar sm" id="user-avatar">AU</span><span class="who"><b id="user-name">Admin User</b><small id="user-role">Administrator</small></span><span data-icon="chevron"></span></button>
+          <div id="user-panel" class="dropdown user-panel hidden">
+            <div class="dd-user"><strong id="user-panel-name">User</strong><span id="user-panel-role" class="role-badge">Role</span></div>
+            <button class="dd-item" data-act="signout"><span data-icon="logout"></span>Sign out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div id="emergency-banner" class="emergency hidden" role="alert">
+      <span data-icon="alert"></span>
+      <strong id="emergency-text"></strong>
+      <button class="btn light" data-act="emergency">Open emergency panel</button>
+    </div>
+
+    <main class="content">
+
+      <!-- ===== OVERVIEW ===== -->
+      <section id="view-overview" class="view active">
+        <div id="link-banner" class="notice hidden"></div>
+        <div id="kpi-grid" class="kpi-grid"></div>
+        <div id="ward-status" class="wardbar"></div>
+
+        <section id="priority-card" class="card priority hidden">
+          <div class="section-head tight"><h3>Needs action now</h3><button class="link" data-focus="critical">Open critical view →</button></div>
+          <div id="priority-list"></div>
+        </section>
+
+        <div class="section-head">
+          <h2>Patients</h2>
+          <div class="head-tools">
+            <div class="chips" id="overview-filters">
+              <button class="fchip active" data-filter="all">All</button>
+              <button class="fchip" data-filter="critical">Critical</button>
+              <button class="fchip" data-filter="attention">Needs attention</button>
+              <button class="fchip" data-filter="normal">Normal</button>
+              <button class="fchip" data-filter="none">No signal</button>
+            </div>
+            <button class="link" data-focus="all">Open full view →</button>
+          </div>
+        </div>
+        <div id="patient-grid" class="pgrid"></div>
+        <div class="two-col">
+          <section class="card">
+            <div class="section-head tight"><h3>Open alerts</h3><button class="link" data-go="alerts">View all</button></div>
+            <div id="overview-alerts"></div>
+          </section>
+          <section class="card" data-perm="view.staff">
+            <div class="section-head tight"><h3>Staff on duty</h3><button class="link" data-go="staff">Manage team</button></div>
+            <div id="overview-staff"></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- ===== FOCUS (opened from overview cards) ===== -->
+      <section id="view-focus" class="view">
+        <div id="focus-hero"></div>
+        <div id="focus-tabs" class="ftabs"></div>
+        <div class="toolbar">
+          <div class="search"><span data-icon="search"></span><input id="focus-search" type="search" placeholder="Filter by name, record number or room" /></div>
+          <label class="inline-select">Sort by
+            <select id="focus-sort" class="mini-select">
+              <option value="severity">Most urgent first</option>
+              <option value="risk">Risk score</option>
+              <option value="hr">Heart rate (high to low)</option>
+              <option value="recent">Latest reading</option>
+              <option value="name">Name (A to Z)</option>
+            </select>
+          </label>
+          <span class="spacer"></span>
+          <div class="seg" id="focus-mode">
+            <button data-fmode="cards" class="active"><span data-icon="grid"></span>Cards</button>
+            <button data-fmode="table"><span data-icon="list"></span>Table</button>
+          </div>
+        </div>
+        <div id="focus-body"></div>
+      </section>
+
+      <!-- ===== LIVE MONITOR ===== -->
+      <section id="view-monitor" class="view">
+        <div class="monitor-top">
+          <label class="inline-select">Patient
+            <select id="monitor-select"></select>
+          </label>
+          <div id="monitor-meta" class="muted"></div>
+          <span class="spacer"></span>
+          <button class="btn ghost" data-act="link-device" id="btn-link-device"><span data-icon="link"></span>Link IoT device to this patient</button>
+        </div>
+        <div id="monitor-empty" class="empty hidden">
+          <span data-icon="users" class="empty-ico"></span>
+          <h3>No patient selected</h3>
+          <p>Add a patient profile to start monitoring.</p>
+          <button class="btn primary" data-act="add-patient" data-perm="patient.add">Add patient</button>
+        </div>
+
+        <div id="monitor-content">
+          <div class="vitals-row">
+            <div class="card vital" id="hr-card">
+              <div class="vital-head"><span class="vital-ico hr" data-icon="heart"></span><h3>Heart rate</h3><span class="trend" id="hr-trend"></span></div>
+              <p class="vital-val"><span id="hr-val">--</span><small>BPM</small></p>
+              <p class="muted small" id="hr-range"></p>
+            </div>
+            <div class="card vital" id="temp-card">
+              <div class="vital-head"><span class="vital-ico temp" data-icon="thermo"></span><h3>Body temperature</h3><span class="trend" id="temp-trend"></span></div>
+              <p class="vital-val"><span id="temp-val">--</span><small>°C</small></p>
+              <p class="muted small" id="temp-range"></p>
+            </div>
+            <div class="card vital" id="spo2-card">
+              <div class="vital-head"><span class="vital-ico spo2" data-icon="drop"></span><h3>Blood oxygen (SpO₂)</h3><span class="trend" id="spo2-trend"></span></div>
+              <p class="vital-val"><span id="spo2-val">--</span><small>%</small></p>
+              <p class="muted small" id="spo2-range"></p>
+            </div>
+            <div class="card vital" id="wear-card">
+              <div class="vital-head"><span class="vital-ico wear" data-icon="watch"></span><h3>Wear status</h3></div>
+              <p class="vital-val"><span id="wear-badge" class="wear-badge off">Not wearing</span></p>
+              <p class="muted small" id="wear-desc"></p>
+              <p class="muted small" id="last-sync">Last sync: --</p>
+            </div>
+          </div>
+
+          <div class="monitor-grid">
+            <section class="card ecg-card span-2">
+              <div class="section-head tight"><h3>Live ECG-style pulse</h3><span class="muted small" id="ecg-label">Waiting for signal</span></div>
+              <canvas id="ecg"></canvas>
+            </section>
+
+            <section class="card state-card span-2" id="state-card">
+              <div class="section-head tight"><h3>Current health state</h3><span class="chip none" id="state-badge">No data</span></div>
+              <div class="score">
+                <div class="score-top"><span class="muted small">Risk score</span><b id="state-score-num">--</b></div>
+                <div class="bar"><i id="state-score-bar"></i></div>
+                <span class="muted small" id="state-conf"></span>
+              </div>
+              <ul class="reasons" id="state-reasons"></ul>
+              <div class="recs">
+                <h4>Recommended actions</h4>
+                <ul id="state-recs"></ul>
+              </div>
+              <p class="muted small" id="state-baseline"></p>
+            </section>
+
+            <section class="card chart-card span-3">
+              <div class="section-head tight">
+                <h3 id="chart-title">Telemetry trend</h3>
+                <div class="chart-controls">
+                  <div class="seg">
+                    <button class="chart-tab active" data-metric="bpm">Heart rate</button>
+                    <button class="chart-tab" data-metric="temp">Temperature</button>
+                    <button class="chart-tab" data-metric="spo2">SpO₂</button>
+                  </div>
+                  <select id="chart-range" class="mini-select">
+                    <option value="30">Last 30 readings</option>
+                    <option value="60" selected>Last 60 readings</option>
+                    <option value="150">Last 150 readings</option>
+                  </select>
+                </div>
+              </div>
+              <div class="chart-wrapper"><canvas id="telemetryChart"></canvas></div>
+            </section>
+
+            <section class="card stats-card">
+              <div class="section-head tight"><h3>Statistics</h3><span class="chip info" id="stats-name">--</span></div>
+              <div class="stats-grid">
+                <div><span>Mean</span><strong id="stat-avg">--</strong></div>
+                <div><span>Std deviation</span><strong id="stat-std">--</strong></div>
+                <div><span>Minimum</span><strong id="stat-min">--</strong></div>
+                <div><span>Maximum</span><strong id="stat-max">--</strong></div>
+              </div>
+              <p class="muted small" id="stat-count"></p>
+            </section>
+
+            <section class="card span-2" id="loss-card">
+              <div class="section-head tight"><h3>Signal-loss analysis</h3><span class="chip none" id="loss-badge">Signal OK</span></div>
+              <div id="loss-body"></div>
+            </section>
+
+            <section class="card span-2">
+              <div class="section-head tight"><h3>Patient &amp; care team</h3></div>
+              <div id="info-body"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== PATIENTS ===== -->
+      <section id="view-patients" class="view">
+        <div class="toolbar">
+          <div class="search"><span data-icon="search"></span><input id="patient-search" type="search" placeholder="Search by name, record number, room or notes" /></div>
+          <select id="patient-filter" class="mini-select">
+            <option value="all">All states</option>
+            <option value="critical">Critical now</option>
+            <option value="attention">Needs attention now</option>
+            <option value="normal">Normal now</option>
+            <option value="none">No signal</option>
+          </select>
+          <span class="spacer"></span>
+          <button class="btn primary" data-act="add-patient" data-perm="patient.add"><span data-icon="plus"></span>Add patient</button>
+        </div>
+        <div class="card flush">
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Patient</th><th>Room</th><th>Baseline</th><th>Live state</th><th>Latest vitals</th><th>Assigned to</th><th></th></tr></thead>
+              <tbody id="patient-rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== CARE TEAM ===== -->
+      <section id="view-staff" class="view">
+        <div id="staff-stats" class="stat-row"></div>
+        <div id="staff-coverage"></div>
+        <div class="toolbar">
+          <div class="search"><span data-icon="search"></span><input id="staff-search" type="search" placeholder="Search staff by name, role or department" /></div>
+          <div class="chips" id="staff-chips"></div>
+          <span class="spacer"></span>
+          <button class="switch" id="duty-only" data-act="duty-only"><i></i>On duty only</button>
+          <button class="btn primary" data-act="add-staff" data-perm="staff.manage"><span data-icon="plus"></span>Add staff member</button>
+        </div>
+        <div id="staff-grid" class="tgrid"></div>
+      </section>
+
+      <!-- ===== ALERTS ===== -->
+      <section id="view-alerts" class="view">
+        <div class="alerts-top">
+          <div id="alert-stats" class="stat-row tight"></div>
+          <section class="card weekcard"><div class="section-head tight"><h3>Last 7 days</h3><span class="week-legend"><i class="dot critical"></i>Critical <i class="dot attention"></i>Attention</span></div><div id="alert-week"></div></section>
+        </div>
+        <div class="toolbar">
+          <div class="chips" id="alert-filters"></div>
+          <select id="alert-sev" class="mini-select" aria-label="Severity">
+            <option value="all">All severities</option>
+            <option value="critical">Critical only</option>
+            <option value="attention">Attention only</option>
+          </select>
+          <div class="search"><span data-icon="search"></span><input id="alert-search" type="search" placeholder="Search by patient or alert" /></div>
+          <span class="spacer"></span>
+          <button class="btn ghost" id="alert-ack-all" data-act="ack-all"><span data-icon="check"></span>Acknowledge all open</button>
+        </div>
+        <div id="alert-list" class="alert-list"></div>
+      </section>
+
+      <!-- ===== HEALTH ANALYSIS ===== -->
+      <section id="view-analysis" class="view">
+        <div class="toolbar">
+          <label class="inline-select">Patient<select id="analysis-select" class="mini-select"></select></label>
+          <label class="inline-select">Period
+            <select id="analysis-range" class="mini-select">
+              <option value="30">Last 30 readings</option>
+              <option value="100" selected>Last 100 readings</option>
+              <option value="300">Last 300 readings</option>
+            </select>
+          </label>
+          <span class="spacer"></span>
+          <button class="btn ghost" data-act="export-analysis" data-perm="export.vitals"><span data-icon="download"></span>Export analysis (CSV)</button>
+        </div>
+        <div id="analysis-empty" class="empty hidden"><span data-icon="chart" class="empty-ico"></span><h3>No patients yet</h3><p>Add patients and start their wearables to see health analysis.</p></div>
+        <div id="analysis-content">
+          <div id="analysis-kpis" class="akpi-grid"></div>
+          <div class="analysis-grid">
+            <section class="card span-2">
+              <div class="section-head tight"><h3 id="chart-trend-title">Heart rate</h3></div>
+              <div class="chart-wrapper short"><canvas id="ch-trend"></canvas></div>
+              <p id="chart-trend-empty" class="muted hidden">No readings yet. The chart appears as soon as the wearables send data.</p>
+            </section>
+            <section class="card">
+              <div class="section-head tight"><h3>Time in each zone</h3></div>
+              <div class="chart-wrapper short"><canvas id="ch-zones"></canvas></div>
+            </section>
+            <section class="card">
+              <div class="section-head tight"><h3>Heart-rate distribution</h3><span class="muted small">readings per BPM range</span></div>
+              <div class="chart-wrapper compact"><canvas id="ch-hist"></canvas></div>
+            </section>
+            <section class="card">
+              <div class="section-head tight"><h3>Temperature &amp; SpO₂</h3></div>
+              <div id="vitals-pick" class="empty inline">Select a patient above to see temperature and oxygen trends.</div>
+              <div id="ch-vitals-wrap" class="chart-wrapper compact hidden"><canvas id="ch-vitals"></canvas></div>
+            </section>
+            <section class="card">
+              <div class="section-head tight"><h3>Alerts by type</h3><span class="muted small">last 7 days</span></div>
+              <div id="ch-alerts-empty" class="empty inline">No alerts in the last 7 days.</div>
+              <div id="ch-alerts-wrap" class="chart-wrapper compact hidden"><canvas id="ch-alerts"></canvas></div>
+            </section>
+            <section class="card span-2">
+              <div class="section-head tight"><h3>Key insights</h3><span class="muted small">Found automatically in the selected period</span></div>
+              <div id="analysis-insights" class="insights"></div>
+            </section>
+            <section class="card flush span-3 rank-card">
+              <div class="section-head tight pad"><h3>Patient health ranking</h3><span class="muted small">Lowest score first. Click a row to open the monitor</span></div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th>Patient</th><th>Health score</th><th>Avg HR</th><th>Temp °C</th><th>SpO₂ %</th><th>In range</th><th>Rapid rises</th><th>Uptime</th><th>HR trend</th></tr></thead>
+                  <tbody id="analysis-rank"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== MAP ===== -->
+      <section id="view-map" class="view">
+        <div class="map-layout">
+          <div class="card flush map-card"><div id="map"></div></div>
+          <div class="map-side">
+            <section class="card">
+              <div class="section-head tight"><h3>Nearest hospitals</h3><button class="btn ghost sm" data-act="locate">Refresh</button></div>
+              <div id="facility-list" class="facility-list"><p class="muted">Open this page to find healthcare facilities near you.</p></div>
+            </section>
+            <section class="card">
+              <h3>When a patient is critical</h3>
+              <ol class="checklist">
+                <li>Call the patient or their emergency contact.</li>
+                <li>Send the nearest staff member or emergency responder.</li>
+                <li>Share the patient's baseline condition and notes with the responders.</li>
+                <li>Head to the closest hospital listed here.</li>
+              </ol>
+              <div id="map-patient"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== SETTINGS (administrators) ===== -->
+      <section id="view-settings" class="view">
+        <div class="stabs" id="settings-tabs" role="tablist">
+          <button data-stab="general" class="active"><span data-icon="sliders"></span>General</button>
+          <button data-stab="rules"><span data-icon="activity"></span>Rules &amp; thresholds</button>
+          <button data-stab="access"><span data-icon="shield"></span>Access &amp; users</button>
+          <button data-stab="data"><span data-icon="database"></span>Data &amp; tools</button>
+        </div>
+
+        <div class="stab-panel" id="stab-general">
+          <div class="settings-grid">
+            <section class="card">
+              <h3>Data source</h3>
+              <p class="muted">Live mode reads your Firebase Realtime Database. Demo mode runs entirely in the browser with simulated patients, useful for presentations.</p>
+              <div class="seg wide">
+                <button data-act="set-mode" data-mode="live" id="mode-live">Live (Firebase)</button>
+                <button data-act="set-mode" data-mode="demo" id="mode-demo">Demo (simulated)</button>
+              </div>
+            </section>
+            <section class="card">
+              <h3>Appearance &amp; sound</h3>
+              <p class="muted">These preferences are stored in this browser.</p>
+              <span class="muted small">Theme</span>
+              <div class="seg wide" id="pref-theme"><button data-act="set-theme" data-theme="dark">Dark</button><button data-act="set-theme" data-theme="light">Light</button></div>
+              <span class="muted small">Alarm sound for critical alerts</span>
+              <div class="seg wide" id="pref-sound"><button data-act="set-sound" data-sound="on">On</button><button data-act="set-sound" data-sound="off">Off</button></div>
+            </section>
+            <section class="card span-2 session-card">
+              <div><h3>Your session</h3><p class="muted">Signed in as <b id="session-name">--</b> · <span id="session-role">--</span></p></div>
+              <button class="btn ghost" data-act="signout"><span data-icon="logout"></span>Sign out</button>
+            </section>
+          </div>
+        </div>
+
+        <div class="stab-panel hidden" id="stab-rules">
+          <div id="rules-root"></div>
+          <section class="card" id="rules-log-card"><div class="section-head tight"><h3>Change history</h3><span class="muted small">Latest rule edits by your team</span></div><div id="rules-log"></div></section>
+        </div>
+
+        <div class="stab-panel hidden" id="stab-access"><div id="access-root"></div></div>
+
+        <div class="stab-panel hidden" id="stab-data">
+          <div class="settings-grid">
+            <section class="card" id="sim-card">
+              <h3>Scenario simulator</h3>
+              <p class="muted">Demo mode only. Pick a patient and trigger a situation to see the alerts and decision logic react.</p>
+              <label class="field">Patient<select id="sim-patient"></select></label>
+              <div class="sim-buttons">
+                <button class="btn ghost" data-act="sim" data-mode="normal">Back to normal</button>
+                <button class="btn ghost" data-act="sim" data-mode="fever">Fever</button>
+                <button class="btn ghost" data-act="sim" data-mode="tachy">Tachycardia</button>
+                <button class="btn ghost" data-act="sim" data-mode="hypoxia">Low SpO₂</button>
+                <button class="btn ghost" data-act="sim" data-mode="loose">Sensor slips off</button>
+                <button class="btn ghost" data-act="sim" data-mode="spike">BPM spike, then signal lost</button>
+              </div>
+            </section>
+            <section class="card">
+              <h3>Database tools</h3>
+              <p class="muted">Create starter records in your database, or export what you have.</p>
+              <div class="stack">
+                <button class="btn ghost" data-act="seed-db"><span data-icon="database"></span>Add sample patients &amp; staff to the database</button>
+                <button class="btn ghost" data-act="export-patients"><span data-icon="download"></span>Export patients (CSV)</button>
+                <button class="btn ghost" data-act="export-staff"><span data-icon="download"></span>Export staff (CSV)</button>
+                <button class="btn ghost" data-act="export-vitals"><span data-icon="download"></span>Export selected patient's vitals (CSV)</button>
+              </div>
+            </section>
+            <section class="card span-2">
+              <h3>Database structure</h3>
+              <p class="muted">What the dashboard reads and writes. Your wearable only needs to write <code>iot/current</code>.</p>
+              <pre class="schema">patients/{patientId}          mrn, name, age, gender, room, phone, contactName, contactPhone,
+                              condition, notes, assignedStaff, deviceId, createdAt
+staff/{staffId}               name, role, department, phone, email, shift, onDuty, createdAt
+vitals/{patientId}/{pushId}   bpm, temperature, spo2, is_wearing, timestamp
+alerts/{alertId}              patientId, patientName, level, type, title, message, vitals,
+                              status, notified, createdAt, ackBy, ackAt, resolvedBy, resolvedAt
+config/rules                  values{...thresholds}, meta{key: {ts, by}}      (edited in Rules &amp; thresholds)
+config/rules_log/{id}         key, label, from, to, by, ts                    (rule change history)
+iot/current                   heart_rate, temperature, spo2, is_wearing, timestamp   (written by the sensor)
+iot/linked_patient            patientId of the person wearing the sensor
+live/{patientId}              same payload as iot/current (optional, one node per wearable)</pre>
+            </section>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
